@@ -1,0 +1,70 @@
+Composite: When I generate parquet with the name `$fileName` using schema `$schema` and data:
+`$table`
+When I execute commands `cd <schema>; ls | tail -n 1` on rgn over SSH
+Given I initialize the scenario variable `scalaScript` using template `templates/generate_parquet.ftl` with parameters:
+{transformer=MERGING, mergeMode=columns, fillerValue= , tables=
+|_schema                                              |_file                                                 |
+|<schema>/#{eval(`${ssh-stdout}`.replaceAll(`\n`,``))}|<fileName>_#{generateDate(P, YYYY-MM-dd'T'hh-mm-ss)}  |;
+<table>}
+When I create file with content `${scalaScript}` at path `${homeDir}/create.scala` on rgn over SFTP
+When I execute commands `echo "${userPassword}" | kinit ${userEmail}` on rgn over SSH
+When I execute commands `spark-shell --master local -i create.scala` on rgn over SSH
+When I execute commands `rm create.scala` on rgn over SSH
+
+Composite: Given I upload '$schema' schema to the '$directory' directory
+When I create file with content `#{loadResource(<schema>)}` at path `<directory>` on rgn over SFTP
+
+Composite: When I delete '$schema' schema from the Spark node
+When I execute commands `rm <schema>` on rgn over SSH
+
+Composite: When I save result of SQL query `$query` over parquet located by path `$path` to variable with the name `$variable` and with `$index`
+Given I initialize the scenario variable `script` using template `templates/read_parquet.ftl` with parameters:
+|_file        |_sql   |_csv                            |
+|s3a://<path> |<query>|file://${homeDir}/etl<index>_csv|
+When I create file with content `${script}` at path `${homeDir}/read<index>.scala` on rgn over SFTP
+When I execute commands `echo "${userPassword}"| kinit ${userEmail}` on rgn over SSH
+When I execute commands `spark-shell --master local -i read<index>.scala` on rgn over SSH
+When I execute commands `cd etl<index>_csv; get *.csv` on rgn over SFTP and save result to scenario variable `csv`
+When I save CSV `${csv}` to scenario variable `<variable>`
+When I execute commands `rm read<index>.scala` on rgn over SSH
+When I execute commands `rm -rf etl<index>_csv` on rgn over SSH
+
+Composite: When I run Spark job with the name '$jobName' for the source '$sourceName' and put to target '$targetName'
+When I execute commands `cd /hadoopfs/fs1/airflow/rgn-hsm-etl/ && spark-submit --keytab /etc/security/keytabs/spark.service.keytab --principal spark/${host}@REGENERON.REGN.COM --master yarn ${queue} --py-files rgn-hsm-etl.zip etl/jobs/<jobName>.py ${runConfiguration} --source_entity <sourceName> --target_entity <targetName> --batch_date #{generateDate(P, YYYY-MM-dd)}` on rgn over SSH
+
+Composite: When I clear test data in '$zone' zone
+When I execute commands `aws s3 rm <zone> --recursive` on rgn over SSH
+
+Composite: When I set Airflow variable '$variable' with value '$value'
+When I execute commands `echo "bash -ci 'source /hadoopfs/fs1/airflow-env/bin/activate && airflow variables -s <variable> <value>;'" | sudo su airflow` on rgn over SSH
+
+Composite: When I perform Airflow DAG run '$dagId'
+When I trigger DAG run by id '<dagId>'
+When I wait while DAG run complete
+
+Composite: When I trigger DAG run by id '$dagId'
+Given request body: {"conf":"{}"}
+When I send HTTP POST to the relative URL '/dags/<dagId>/dag_runs'
+Then the response code is = '200'
+When I save response body to the SCENARIO variable 'runResponse'
+
+Composite: When I wait while DAG run complete
+When I send HTTP GET to the relative URL '/latest_runs'
+Then the response code is = '200'
+When I save JSON element from context by JSON path `$.items.[?(@.dag_id=="<dagId>")].execution_date` to SCENARIO variable `execution_date`
+When I initialize the SCENARIO variable `execution_date_normalized` with value `#{eval(`${execution_date}`.replace("\"", "").replace("[", "").replace("]", "").replace("+00:00", "").trim())}`
+When I wait for presence of the element by JSON path '$.[?($.state!="running"&&$.state!="queued")]' in HTTP GET response from '${api-endpoint}/dags/<dagId>/dag_runs/${execution_date_normalized}' for '${dagTimeout}' duration
+
+Composite: When I wait while DAG run complete by run id
+When I initialize the SCENARIO variable `runId` with value `#{replaceFirstByRegExp(.*(manual__.*)\,.externally triggered.*, $1, ${runResponse})}`
+When I initialize the SCENARIO variable `dagPath` with value `$[?(@.run_id=="${runId}"&& @.state!="running" && @.state!="queued")]`
+When I wait for presence of the element by JSON path '${dagPath}' in HTTP GET response from '${api-endpoint}/dags/<dagId>/dag_runs' for '${dagTimeout}' duration
+
+Composite: When I clear '$LIMS' test data in all S3 buckets
+When I clear test data in '${<LIMS>Raw}' zone
+When I clear test data in '${prerefinedZone}' zone
+When I clear test data in '${refinedZone}' zone
+When I clear test data in '${publishedZone}' zone
+
+Composite: When I clear DB with key '$dbKey'
+When I execute SQL query `TRUNCATE sample CASCADE;TRUNCATE users, tfa_group CASCADE;` against `<dbKey>`
